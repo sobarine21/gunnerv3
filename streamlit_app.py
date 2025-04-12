@@ -1,10 +1,12 @@
 import streamlit as st
-import google.generativeai as genai
 import pandas as pd
 import requests
 from googletrans import Translator
 import asyncio
 from bs4 import BeautifulSoup
+import os
+from google import genai
+from google.genai import types
 
 # Function to check API key
 def check_api_key(user_key):
@@ -49,24 +51,64 @@ async def translate_text(text, target_language):
         st.error(f"Error translating text: {e}")
         return text
 
-# Function to perform AI-powered compliance checks
-def perform_compliance_check(html_content):
+# Function to perform AI-powered compliance checks with Gemini
+def perform_compliance_check_gemini(html_content):
     # Extract visible text from the HTML template
     soup = BeautifulSoup(html_content, "html.parser")
     visible_text = soup.get_text()
 
-    # Define the regulations for compliance check
-    regulations_url = "https://www.sebi.gov.in/sebi_data/commondocs/cirmf42000_h.html"
-    regulations_text = f"Perform compliance check based on the mutual funds advertising regulations available at {regulations_url}."
+    # Set up Gemini client
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    model = "gemini-2.0-flash"
 
-    # Use Google Generative AI (or any other NLP model) for compliance analysis
+    # Prepare the prompt
+    prompt = f"Analyze the following email content for compliance with mutual fund advertising regulations:\n\n{visible_text}"
+
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(text=prompt),
+            ],
+        ),
+    ]
+
+    generate_content_config = types.GenerateContentConfig(
+        safety_settings=[
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_CIVIC_INTEGRITY",
+                threshold="BLOCK_LOW_AND_ABOVE",
+            ),
+        ],
+        response_mime_type="text/plain",
+    )
+
+    # Generate compliance check report
+    compliance_report = ""
     try:
-        compliance_analysis = genai.generate(
-            prompt=f"Analyze the following email content for compliance with mutual fund advertising regulations:\n\n{visible_text}\n\n{regulations_text}",
-            model="text-bison"
-        )
-        analysis_result = compliance_analysis["results"][0]["content"]
-        return analysis_result
+        for chunk in client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=generate_content_config,
+        ):
+            compliance_report += chunk.text
+        return compliance_report
     except Exception as e:
         st.error(f"Error performing compliance check: {e}")
         return "Compliance check failed."
@@ -105,7 +147,7 @@ if user_key:
 
                             # Perform compliance check
                             st.markdown("**Compliance Check Report:**")
-                            compliance_report = perform_compliance_check(html_content)
+                            compliance_report = perform_compliance_check_gemini(html_content)
                             st.text_area("Compliance Report", compliance_report, height=300)
 
                         except Exception as e:
