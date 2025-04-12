@@ -1,8 +1,10 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+import google.generativeai as genai
 import pandas as pd
-import base64
+import requests
+from googletrans import Translator
+import asyncio
+from bs4 import BeautifulSoup
 
 # Function to check API key
 def check_api_key(user_key):
@@ -15,116 +17,138 @@ def check_api_key(user_key):
     ]
     return user_key in valid_keys
 
-# Function to scrape SEBI regulations
-def scrape_sebi_regulations(url):
+# Function to send email using Mailgun
+MAILGUN_DOMAIN = "evertechcms.in"
+MAILGUN_FROM = "Ever CMS <mailgun@evertechcms.in>"
+
+def send_email(to_email, subject, html_content, api_key):
     try:
-        response = requests.get(url)
+        response = requests.post(
+            f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages",
+            auth=("api", api_key),
+            data={
+                "from": MAILGUN_FROM,
+                "to": to_email,
+                "subject": subject,
+                "html": html_content  # Send HTML content
+            }
+        )
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        regulations = soup.get_text(separator="\n").strip()
-        return regulations
+        return True
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching SEBI regulations: {e}")
-        return None
+        st.error(f"Failed to send email to {to_email}: {e}")
+        return False
 
-# Function to analyze compliance
-def analyze_compliance(html_content, regulations):
-    soup = BeautifulSoup(html_content, 'html.parser')
-    email_text = soup.get_text(separator=" ").strip()
-    
-    non_compliance_issues = []
-    regulation_lines = regulations.split("\n")
-    
-    for line in regulation_lines:
-        if line.strip() and line.lower() in email_text.lower():
-            non_compliance_issues.append(line.strip())
-    
-    return non_compliance_issues
+# Function for Multilingual Support using Google Translate (Asynchronous)
+async def translate_text(text, target_language):
+    translator = Translator()
+    try:
+        translation = await translator.translate(text, dest=target_language)
+        return translation.text
+    except Exception as e:
+        st.error(f"Error translating text: {e}")
+        return text
 
-# Function to generate a compliance report
-def generate_compliance_report(html_content, regulations, non_compliance_issues):
-    report = "### Compliance Report\n\n"
-    report += "**Regulations Checked:**\n"
-    report += regulations + "\n\n"
-    
-    report += "**Compliance Issues Found:**\n"
-    if non_compliance_issues:
-        for issue in non_compliance_issues:
-            report += f"- {issue}\n"
-    else:
-        report += "No compliance issues found.\n\n"
-    
-    report += "**Analyzed Email Content:**\n"
-    report += html_content
-    return report
+# Function to perform AI-powered compliance checks
+def perform_compliance_check(html_content):
+    # Extract visible text from the HTML template
+    soup = BeautifulSoup(html_content, "html.parser")
+    visible_text = soup.get_text()
 
-# Function to download compliance report
-def download_report(report_text):
-    b64 = base64.b64encode(report_text.encode()).decode()
-    href = f'<a href="data:file/txt;base64,{b64}" download="compliance_report.txt">Download Compliance Report</a>'
-    st.markdown(href, unsafe_allow_html=True)
+    # Define the regulations for compliance check
+    regulations_url = "https://www.sebi.gov.in/sebi_data/commondocs/cirmf42000_h.html"
+    regulations_text = f"Perform compliance check based on the mutual funds advertising regulations available at {regulations_url}."
+
+    # Use Google Generative AI (or any other NLP model) for compliance analysis
+    try:
+        compliance_analysis = genai.generate(
+            prompt=f"Analyze the following email content for compliance with mutual fund advertising regulations:\n\n{visible_text}\n\n{regulations_text}",
+            model="text-bison"
+        )
+        analysis_result = compliance_analysis["results"][0]["content"]
+        return analysis_result
+    except Exception as e:
+        st.error(f"Error performing compliance check: {e}")
+        return "Compliance check failed."
 
 # Streamlit app
-SEBI_URL = "https://www.sebi.gov.in/sebi_data/commondocs/cirmf42000_h.html"
 user_key = st.text_input("Enter your API key to access the app:", type="password")
 
 if user_key:
     if not check_api_key(user_key):
         st.error("Invalid API Key! Access Denied.")
     else:
-        st.title("AI Powered Newsletter & Email Compliance Checker")
+        st.title("AI Powered Newsletter & Compliance Checker")
 
-        # Scrape SEBI Regulations
-        st.markdown("### Fetching SEBI Regulations")
-        regulations = scrape_sebi_regulations(SEBI_URL)
+        # Upload CSV
+        uploaded_file = st.file_uploader("Upload CSV file (columns: email, first_name)", type="csv")
 
-        if regulations:
-            st.success("SEBI Regulations Fetched Successfully")
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                if 'email' not in df.columns or 'first_name' not in df.columns:
+                    st.error("CSV must contain 'email' and 'first_name' columns.")
+                else:
+                    email_list = df['email'].tolist()
+                    first_name_list = df['first_name'].tolist()
 
-            # Upload CSV
-            uploaded_file = st.file_uploader("Upload CSV file (columns: email, first_name)", type="csv")
+                    subject = st.text_input("Email Subject", "Your Newsletter")
 
-            if uploaded_file is not None:
-                try:
-                    df = pd.read_csv(uploaded_file)
-                    if 'email' not in df.columns or 'first_name' not in df.columns:
-                        st.error("CSV must contain 'email' and 'first_name' columns.")
-                    else:
-                        email_list = df['email'].tolist()
-                        first_name_list = df['first_name'].tolist()
+                    # HTML Template Upload
+                    html_file = st.file_uploader("Upload HTML Email Template", type="html")
+                    html_content = ""
+                    if html_file is not None:
+                        try:
+                            html_content = html_file.read().decode("utf-8")
+                            st.markdown("**Uploaded HTML Template Preview**:")
+                            st.markdown(html_content, unsafe_allow_html=True)
 
-                        subject = st.text_input("Email Subject", "Your Newsletter")
+                            # Perform compliance check
+                            st.markdown("**Compliance Check Report:**")
+                            compliance_report = perform_compliance_check(html_content)
+                            st.text_area("Compliance Report", compliance_report, height=300)
 
-                        # HTML Template Upload
-                        html_file = st.file_uploader("Upload HTML Email Template", type="html")
-                        html_content = ""
-                        if html_file is not None:
-                            try:
-                                html_content = html_file.read().decode("utf-8")
-                                st.markdown("### Uploaded HTML Template Preview")
-                                st.markdown(html_content, unsafe_allow_html=True)
+                        except Exception as e:
+                            st.error(f"Error reading HTML file: {e}")
 
-                                # Analyze Compliance
-                                st.markdown("### Compliance Analysis")
-                                non_compliance_issues = analyze_compliance(html_content, regulations)
+                    # Language selection
+                    language_options = ["en", "es", "fr", "de", "it", "pt", "ru", "hi"]
+                    selected_language = st.selectbox("Select Email Language", language_options)
 
-                                if non_compliance_issues:
-                                    st.error("Compliance Issues Found:")
-                                    for issue in non_compliance_issues:
-                                        st.markdown(f"- {issue}")
-                                else:
-                                    st.success("No compliance issues found! You may proceed.")
+                    # Translate email content if needed
+                    if selected_language != "en" and html_content:
+                        translated_body = asyncio.run(translate_text(html_content, selected_language))
+                        st.session_state.translated_body = translated_body  # Store translated body in session state
 
-                                # Generate and Download Compliance Report
-                                report = generate_compliance_report(html_content, regulations, non_compliance_issues)
-                                download_report(report)
+                    # Show the translated body if available
+                    if 'translated_body' in st.session_state:
+                        st.markdown("**Translated HTML Template Preview**:")
+                        st.markdown(st.session_state.translated_body, unsafe_allow_html=True)
 
-                                # Proceed Option
-                                proceed = st.checkbox("I have reviewed the compliance report and wish to proceed.")
-                                if proceed:
-                                    st.success("You are ready to send your email campaign!")
+                    preview_email = st.checkbox("Preview Email with First Record")
+                    if preview_email and len(email_list) > 0:
+                        preview_text = st.session_state.translated_body if 'translated_body' in st.session_state else html_content
+                        personalized_preview = preview_text.replace("{first_name}", first_name_list[0])
+                        st.markdown("**Preview:**")
+                        st.markdown(personalized_preview, unsafe_allow_html=True)
 
-                            except Exception as e:
-                                st.error(f"Error reading HTML file: {e}")
-                except Exception as e:
-                    st.error(f"Error processing CSV: {e}")
+                    confirm_send = st.checkbox("Confirm and Send Campaign")
+
+                    if confirm_send and st.button("Send Emails"):
+                        api_key = st.secrets["MAILGUN_API_KEY"]
+                        success_count = 0
+                        failure_count = 0
+                        for email, first_name in zip(email_list, first_name_list):
+                            personalized_body = st.session_state.translated_body if 'translated_body' in st.session_state else html_content
+                            personalized_body = personalized_body.replace("{first_name}", first_name)
+                            if send_email(email, subject, personalized_body, api_key):
+                                success_count += 1
+                            else:
+                                failure_count += 1
+
+                        st.success(f"Emails sent successfully: {success_count}")
+                        if failure_count > 0:
+                            st.warning(f"Emails failed to send: {failure_count}")
+
+            except Exception as e:
+                st.error(f"Error processing CSV: {e}")
