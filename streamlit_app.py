@@ -2,9 +2,18 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import asyncio
-from googletrans import Translator
 import base64
+
+# Function to check API key
+def check_api_key(user_key):
+    valid_keys = [
+        st.secrets["api_keys"].get("key_1"),
+        st.secrets["api_keys"].get("key_2"),
+        st.secrets["api_keys"].get("key_3"),
+        st.secrets["api_keys"].get("key_4"),
+        st.secrets["api_keys"].get("key_5")
+    ]
+    return user_key in valid_keys
 
 # Function to scrape SEBI regulations
 def scrape_sebi_regulations(url):
@@ -60,7 +69,7 @@ SEBI_URL = "https://www.sebi.gov.in/sebi_data/commondocs/cirmf42000_h.html"
 user_key = st.text_input("Enter your API key to access the app:", type="password")
 
 if user_key:
-    if user_key != "valid_api_key":  # Replace with your actual API key check
+    if not check_api_key(user_key):
         st.error("Invalid API Key! Access Denied.")
     else:
         st.title("AI Powered Newsletter & Email Compliance Checker")
@@ -112,8 +121,8 @@ if user_key:
 
                                 # Proceed Option
                                 proceed = st.checkbox("I have reviewed the compliance report and wish to proceed.")
-                                if proceed and st.button("Confirm and Send Campaign"):
-                                    st.success("Emails sent successfully (simulation).")
+                                if proceed:
+                                    st.success("You are ready to send your email campaign!")
 
                             except Exception as e:
                                 st.error(f"Error reading HTML file: {e}")
